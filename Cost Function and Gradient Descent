@@ -2,10 +2,8 @@
 computeCost <- function(matrixA, matrixB, beta_matrix){
   m <- length(matrixB)
   predictions<-matrixA%*%beta_matrix
-  #print (predictions)
   squaredErrors<-(predictions-matrixB)^2
   J=(1/(2*m))*sum(squaredErrors)
-  #print (J)
   return (J)
 }
 
