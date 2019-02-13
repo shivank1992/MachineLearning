@@ -46,3 +46,11 @@ gradientDescent <- function(train, test, target_var, alpha, iterations, conv_cri
   values<-list("final_beta" = beta_matrix, "train_cost_history" = J_history[1:i],"beta_history" = beta_history,"cost_test" = J_test)
   return(values)
 }
+
+
+##Check gradient descent algorithm
+#target_var <- "target"
+#iterations <- 2000
+#alpha <- 0.1
+#convergence_criteria <- 0.001
+#gradientDescent(train.df, test.df, target_var, alpha, iterations, convergence_criteria)
