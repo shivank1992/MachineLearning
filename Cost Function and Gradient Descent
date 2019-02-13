@@ -1,4 +1,4 @@
-###set up the cost function for least square linear regression:
+###Set up the cost function for least square linear regression:
 computeCost <- function(matrixA, matrixB, beta_matrix){
   m <- length(matrixB)
   predictions<-matrixA%*%beta_matrix
@@ -7,7 +7,7 @@ computeCost <- function(matrixA, matrixB, beta_matrix){
   return (J)
 }
 
-##Create mulvariable gradient descent function. Feed Training and Testing dataframes
+###Create multivariable gradient descent function
 gradientDescent <- function(train, test, target_var, alpha, iterations, conv_crit){
   start.time <- Sys.time()
   print("Initialize parameters...")
