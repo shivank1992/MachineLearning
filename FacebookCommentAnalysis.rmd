@@ -1,0 +1,489 @@
+---
+title: "Assignment 2 - ML"
+author: "Shivank Garg"
+date: "09-March-2019"
+output: 
+  html_document:
+    theme: readable
+    toc: true
+    toc_float: true
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+chooseCRANmirror(graphics=FALSE, ind=1)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo = FALSE, message = FALSE, results= 'hide', warning = FALSE}
+##  Install packages
+list.of.packages <- c("data.table","GGally","corrplot","yarrr","formattable","kableExtra","parallelSVM","fastAdaboost","rattle","xgboost","h2o","doParallel")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+```
+
+```{r loadpackages, message = FALSE}
+library(data.table)
+library(GGally)
+library(caret)
+library(corrplot)
+library(tidyverse)
+library(ggthemes)
+library(tidytext)
+library(tidyr)
+library(yarrr)  #Pirate plot
+library(formattable) #For the color_tile function
+library(kableExtra) #Create nicely formatted output tables
+
+```
+
+```{r readdata}
+#####NOTE : Save this file in a folder where only Traning Features_Variant_1.csv + all 10 Test Cases
+###############################################################################
+##Merge Training Variant-1 and all 10 Testing Dataset Files
+# (1) Make sure where your files are located
+#setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+csv_files <- list.files (path       = "./fb_dataset", 
+                         pattern    = "*.csv", 
+                         full.names = T)
+
+library (data.table)
+library(dplyr)
+facebook.df <- as_tibble(rbindlist (lapply (csv_files, fread)))
+####Dimensions of the dataset should be 41949 Rows and 54 Columns
+#dim(facebook.df)
+
+#Copy for EDA
+fb.train <- facebook.df
+```
+
+##Exploratory Data Analysis
+```{r EDA}
+#Data pre-processing
+##Check for NA values
+sapply(facebook.df,function(x){sum(is.na(x))})
+##Rename column names
+names(facebook.df)[1:4] <- c('likes',
+                             'checkins',
+                             'talking',
+                             'category')
+
+names(facebook.df)[30:39] <- c('CC1',
+                               'CC2',
+                               'CC3',
+                               'CC4',
+                               'CC5',
+                               'base_time',
+                               'post_length',
+                               'post_share_count',
+                               'post_promotion_status',
+                               'hours_taken')
+
+names(facebook.df)[40:46] <- c('p_sun',
+                               'p_mon',
+                               'p_tue',
+                               'p_wed',
+                               'p_thu',
+                               'p_fri',
+                               'p_sat')
+
+names(facebook.df)[47:53] <- c('s_sun',
+                               's_mon',
+                               's_tue',
+                               's_wed',
+                               's_thu',
+                               's_fri',
+                               's_sat')
+
+names(facebook.df)[54] <- c('target')
+facebook.df2 <- facebook.df
+
+#facebook.df2 <- facebook.df[,-(5:29)]
+#facebook.df2 <- facebook.df2[,-"CC5"]
+# summary(facebook.df2)
+# str(facebook.df2)
+sapply(facebook.df2,function(x){sum(is.na(x))})
+#boxplot(facebook.df2,ylim=c(0.01,200))
+
+###Feature Scaling
+target <- as.numeric(as.character(facebook.df2$target))
+scaledFB.df<-as.data.frame(scale(facebook.df2[,-54]))
+scaledFB.df<-as.data.frame(scale(facebook.df2[,-54], 
+                                 center = TRUE, 
+                                 scale = apply(facebook.df2[,-54], 2, sd, na.rm = TRUE)))
+
+
+
+##Remove near zero variance variable
+set.seed(13)
+nzrv <- nearZeroVar(scaledFB.df[,-1], saveMetrics = T)
+discard <- rownames(nzrv[nzrv$zeroVar,])
+keep <- setdiff(names(scaledFB.df), discard)
+cleanFB.df <- scaledFB.df[,keep]
+cat((discard), "is a zero variance variable.")
+
+
+correlationMatrix <- cor(cleanFB.df)
+#visualize the matrix, clustering features by correlation index.
+col<- colorRampPalette(c("red", "white", "blue"))(20)
+corrplot(correlationMatrix, order = "hclust",type="lower",tl.col="black", tl.srt=45,tl.cex = 0.7)
+# find attributes that are highly corrected (ideally >0.7)
+
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.7)
+print(highlyCorrelated)
+names(cleanFB.df[highlyCorrelated])
+
+datMyFiltered.scale <- cleanFB.df[,-highlyCorrelated]
+corMatMy <- cor(datMyFiltered.scale)
+corrplot(corMatMy, order = "hclust",type="lower",tl.col="black", tl.srt=45,tl.cex = 0.7)
+
+
+```
+
+##Principal Component Analysis
+```{r PCA}
+cleanFB.df$target <- NULL
+
+set.seed(13)
+fbtrain.pc <- prcomp(cleanFB.df,center = TRUE, scale. = FALSE)
+summary(fbtrain.pc)
+var.ex <- fbtrain.pc$sdev^2 / sum(fbtrain.pc$sdev^2)
+var.cum <- cumsum(var.ex)
+
+results <- data.frame(num <- 1:length(fbtrain.pc$sdev),
+                      ex = var.ex,
+                      cum = var.cum)
+
+plot(results$num, results$cum, type = "b", xlim = c(0,30), ylim = c(0,1),
+     main = "Variance Explained by Top 30 Components",
+     xlab = "Number of Components", ylab = "Variance Explained")
+
+#Replace train
+fbtrain.score <- as.matrix(cleanFB.df) %*% fbtrain.pc$rotation[,1:22]
+fbtrain.pca <- cbind(target, as.data.frame(fbtrain.score))
+fbtrain.pca$target <- as.factor(fbtrain.pca$target)
+glimpse(fbtrain.pca)
+
+
+str(fbtrain.pca)
+#Thresholding
+fbtrain.pca$target <- cut(as.numeric(fbtrain.pca$target), breaks = c(0, 1, Inf), labels = c(0,1))
+str(fbtrain.pca)
+
+##Count Plot
+fbtrain.pca %>%
+  ggplot(aes(target))+
+  geom_bar(color = "black", fill = "#00CCFF")+
+  theme_minimal()
+```
+
+##Data Prep
+```{r Data Partitioning}
+#split Data
+set.seed(13)
+fbtrainindex <- createDataPartition(fbtrain.pca$target, p=0.75, list= FALSE)
+fb.tr <- fbtrain.pca[fbtrainindex, ]
+fb.te <- fbtrain.pca[-fbtrainindex, ]
+
+# train_y <- train$AdoptionSpeed
+# test_y <- test$AdoptionSpeed
+# train$AdoptionSpeed <- NULL
+# test$AdoptionSpeed <- NULL
+
+```
+
+### SVM
+```{r svm}
+#Pre-Compute CV folds(k=5) so we can use the same ones for all models
+set.seed(13)
+fb_CV_Folds <- createMultiFolds(fb.tr$target, k = 5, times=1)
+
+#Fit a Linear SVM
+library(doParallel)
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',index=fb_CV_Folds, allowParallel = TRUE,verboseIter=TRUE)
+grid <- expand.grid(C=seq(0.6,1.4,0.4))
+set.seed(13)
+fb_L_model <- train(target ~., data = fb.tr,method="svmLinear",
+                 trControl=trnControl,tuneGrid = grid)
+fb_L_model_t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+summary(fb_L_model)
+fb_L_model
+plot(fb_L_model)
+varImp(fb_L_model)
+fb_L_model$bestTune ### Best model is C = 1
+
+#Fit a Poly SVM
+#Run Experiments with diffrent values of C, scale and degrees
+library(doParallel)
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+grid <- expand.grid(C=seq(1,2,0.5),scale=c(0.001,0.01),degree=c(2:6))
+set.seed(13)
+fb_P_model <- train(target ~., data = fb.tr,method="svmPoly",
+                 trControl=trnControl,tuneGrid = grid)
+fb_P_model_t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+fb_P_model
+plot(fb_P_model)
+plot(varImp(fb_P_model))
+fb_P_model$bestTune ### Best model is degree = 6, scale = 0.01 and C = 2
+
+
+#Fit a Radial SVM
+#Run Experiments with diffrent values of C and sigma.
+library(doParallel)
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+grid <- expand.grid(C=seq(1,2,0.5),sigma = c(0.01,0.03,0.01))
+set.seed(13)
+fb_R_model <- train(target ~., data = fb.tr,method="svmRadial",
+                 trControl=trnControl,tuneGrid = grid)
+fb_R_model_t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+summary(fb_R_model_t)
+fb_R_model
+plot(fb_R_model)
+plot(varImp(fb_R_model))
+fb_R_model$bestTune ### Best model is sigma = 0.03 and C = 2
+
+#Compare 3 models:
+fb_resamps <- resamples(list(Linear = fb_L_model, Poly = fb_P_model, Radial = fb_R_model))
+summary(fb_resamps)
+bwplot(fb_resamps, metric = "Accuracy")
+densityplot(fb_resamps, metric = "Accuracy")
+
+```
+
+
+
+### Final SVM Model Predictions
+```{r Final SVM}
+
+# Generate predictions
+pred_fbpsvm <- predict(fb_P_model, fb.te)
+str(pred_fbpsvm)
+
+
+# Performance evaluation - confusion matrix
+fbpsvm_cm <- confusionMatrix(pred_fbpsvm, 
+                fb.te$target,
+                dnn = c("P-SVM-Predicted", "FB-Actual"),
+                positive = "1")
+fbpsvm_cm
+
+confusionMatrix(predict(fb_L_model, fb.te), 
+                fb.te$target,
+                dnn = c("P-SVM-Predicted", "FB-Actual"),
+                positive = "1")
+confusionMatrix(predict(fb_R_model, fb.te), 
+                fb.te$target,
+                dnn = c("P-SVM-Predicted", "FB-Actual"),
+                positive = "1")
+confusionMatrix(predict(fb_P_model, fb.te), 
+                fb.te$target,
+                dnn = c("P-SVM-Predicted", "FB-Actual"),
+                positive = "1")
+
+
+
+###Plot learning curve of training vs CV with no fo training examples with polynomial Model
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+set.seed(13)
+lcurve_fbpsvm <- learing_curve_dat(
+  dat = fb.tr,
+  outcome = "target",
+  test_prop = 0,
+  verbose = TRUE,
+  method = "svmPoly",
+  tuneGrid = expand.grid(C=2,scale=0.01,degree=6)
+)
+t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+summary(lcurve_fbpsvm)
+lcurve_fbpsvm
+
+l.curve.psvm<- ggplot(lcurve_fbpsvm, aes(x = Training_Size, y = Accuracy, color = Data)) + 
+  geom_smooth(method = loess, span = .8) + 
+  theme(legend.position="top")+
+  scale_y_reverse()+
+  labs(title = "FB svmPolynomial(d=6) : Train & Test vs m")
+
+
+l.curve.psvm
+l.curve.lsvm
+
+```
+
+
+### Decision Trees
+```{r Decision Trees}
+
+library(doParallel)
+glimpse(train)
+
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+tune.gridcart <- expand.grid(maxdepth = seq(1,30,1))
+trnControl <- trainControl(method='cv',index=fb_CV_Folds, allowParallel = TRUE)
+set.seed(13)
+fb_dtree_fit_gini <- train(target ~., data = fb.tr, method = "rpart2",
+                   parms = list(split = "information"),
+                   trControl=trnControl,
+                   tuneLength = 3,
+                   tuneGrid =tune.gridcart)
+fb_dtree_fit_gini_t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+
+fb_dtree_fit_gini
+plot(fb_dtree_fit_gini)
+plot(fb_dtree_fit_gini$finalModel)
+text(fb_dtree_fit_gini$finalModel)
+library(rattle)
+fancyRpartPlot(fb_dtree_fit_gini$finalModel, uniform=TRUE,
+               main="Pruned Classification Tree")
+
+# Generate predictions
+pred_fbdt <- predict(fb_dtree_fit_gini, fb.te)
+str(pred_fbdt)
+
+# Performance evaluation - confusion matrix
+fbdt_cm <- confusionMatrix(pred_fbdt, 
+                fb.te$target,
+                dnn = c("DT-Predicted", "FB-Actual"),
+                positive = "1")
+fbdt_cm
+
+
+###Plot learning curve of training vs CV with no fo training examples
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',index=fb_CV_Folds, allowParallel = TRUE)
+set.seed(13)
+lcurve_fbdt <- learing_curve_dat(
+  dat = fb.tr,
+  outcome = "target",
+  test_prop = 0.2,
+  verbose = TRUE,
+  method = "rpart2",
+  parms = list(split = "information"),
+  trControl=trnControl,
+  tuneGrid = expand.grid(maxdepth = 5))
+t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+summary(lcurve_fbdt)
+lcurve_fbdt
+
+l.curve.dt<- ggplot(lcurve_fbdt, aes(x = Training_Size, y = Accuracy, color = Data)) + 
+  geom_smooth(method = loess, span = .8) + 
+  theme(legend.position="top")+
+  scale_y_reverse()+
+  labs(title = "FB Dec Tree(depth=5) : Train & Test vs m")
+
+l.curve.dt
+```
+
+
+### Boosted Decision Trees
+```{r Decision Trees}
+library(doParallel)
+library(xgboost)
+
+
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+fitControl <- trainControl(method = "cv", index=fb_CV_Folds , allowParallel = TRUE,verboseIter=TRUE)
+set.seed(13)
+fb_boosted_tree <- train(target ~., data = fb.tr, method = "xgbTree",
+                   trControl=fitControl,
+                   tuneLength = 3)
+parallel::stopCluster(cl)
+registerDoSEQ()
+
+fb_boosted_tree
+fb_boosted_tree$bestTune
+
+summary(fb_boosted_tree)
+fb_boosted_tree
+plot(fb_boosted_tree)
+plot(varImp(fb_boosted_tree))
+
+# Generate predictions
+pred_fbgbm <- predict(fb_boosted_tree,fb.te)
+
+
+# Performance evaluation - confusion matrix
+fbgbm_cm <- confusionMatrix(pred_fbgbm, 
+                fb.te$target,
+                dnn = c("GBM-Predicted", "FB-Actual"),
+                positive = "1")
+fbgbm_cm
+
+###Plot learning curve of training vs CV with no fo training examples with the best model
+cl <- parallel::makeCluster(detectCores(logical=TRUE)-1, type='PSOCK')
+doParallel::registerDoParallel(cl)
+start.time <- Sys.time()
+trnControl <- trainControl(method='cv',index=fb_CV_Folds, allowParallel = TRUE)
+besttune = expand.grid(nrounds = 150, max_depth = 3, eta = 0.4, gamma = 0, 
+                       colsample_bytree = 0.8, min_child_weight = 1,subsample =1)
+set.seed(13)
+lcurve_fbboosted <- learing_curve_dat(
+  dat = fb.tr,
+  outcome = "target",
+  test_prop = 0.2,
+  method = "xgbTree",
+  tuneGrid = besttune)
+t<- Sys.time() - start.time
+parallel::stopCluster(cl)
+registerDoSEQ()
+summary(lcurve_fbboosted)
+lcurve_fbboosted
+
+l.curve.bdt<- ggplot(lcurve_fbboosted, aes(x = Training_Size, y = Accuracy, color = Data)) + 
+  geom_smooth(method = loess, span = .8) + 
+  theme(legend.position="top")+
+  scale_y_reverse()+
+  labs(title = "FB Boosted Dec Tree : Accuracy(Train & Test Data) vs m")
+
+l.curve.bdt
+
+
+
+```
+
+### Compare all models
+
+```{r Model Comparison}
+
+#Compare 5 models:
+fb_resampsall <- resamples(list(svmLinear = fb_L_model, svmPoly = fb_P_model, svmRadial =fb_R_model,
+                                DecisionTree=fb_dtree_fit_gini, BoostedTree = fb_boosted_tree))
+
+bwplot(fb_resampsall, metric = "Accuracy",main='fbComments : Box Plot for all models(k=5 fold)')
+densityplot(fb_resampsall, metric = "Accuracy",main='fbComments : Density Plot for all models(k=5 fold)')
+parallelplot(fb_resampsall,main='fbComments : Parallel Plot for all models(k=5 fold)')
+
+
+
+```
+
+
