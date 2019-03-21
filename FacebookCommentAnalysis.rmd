@@ -1,5 +1,5 @@
 ---
-title: "Assignment 2 - ML"
+title: "ML : SVM, Decision Trees, Boosting"
 author: "Shivank Garg"
 date: "09-March-2019"
 output: 
