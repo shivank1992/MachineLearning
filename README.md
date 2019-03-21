@@ -1,2 +1,7 @@
 # MachineLearning
-Machine Learning Projects
+##Machine Learning Projects
+
+Gradient Descent from Scratch
+SVM
+Decision Tree
+Ensemble Methods : Boosting Decision Tree
